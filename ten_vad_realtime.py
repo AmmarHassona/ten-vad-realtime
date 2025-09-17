@@ -6,9 +6,9 @@ from ten_vad import TenVad
 SAMPLE_RATE = 16000
 HOP_SIZE = 256
 THRESHOLD = 0.7
-SILENCE_TIMEOUT = 1.5  # seconds
+SILENCE_TIMEOUT = 0.5
 
-vad = TenVad(hop_size=HOP_SIZE, threshold=THRESHOLD)
+vad = TenVad(hop_size = HOP_SIZE, threshold = THRESHOLD)
 last_speech_time = time.time()
 
 def audio_callback(indata, frames, t, status):
@@ -39,12 +39,12 @@ def audio_callback(indata, frames, t, status):
 if __name__ == "__main__":
     print("🎙️ TEN-VAD running in real time... speak now! (Ctrl+C to stop)")
     try:
-        with sd.InputStream(callback=audio_callback,
-                            channels=1,
-                            samplerate=SAMPLE_RATE,
-                            blocksize=HOP_SIZE):
+        with sd.InputStream(callback = audio_callback,
+                            channels = 1,
+                            samplerate = SAMPLE_RATE,
+                            blocksize = HOP_SIZE):
             while True:
-                time.sleep(0.1)  # keep main thread alive
+                time.sleep(0.1)
     except sd.CallbackStop:
         print("✅ Stream closed, exiting program.")
     except KeyboardInterrupt:
