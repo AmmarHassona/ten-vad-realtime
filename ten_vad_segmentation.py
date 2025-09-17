@@ -4,16 +4,19 @@ import time
 import wave
 import os
 from ten_vad import TenVad
+from datetime import datetime
 
 # Parameters
 SAMPLE_RATE = 16000
 HOP_SIZE = 256
 THRESHOLD = 0.7
 SILENCE_TIMEOUT = 1.0
-OUTPUT_DIR = "recordings"
-OVERRIDE_TIMEOUT = SILENCE_TIMEOUT + 2  # merge window
+OVERRIDE_TIMEOUT = 2.0  # merging window
 
-os.makedirs(OUTPUT_DIR, exist_ok = True)
+RAW_DIR = "recordings"
+MERGE_DIR = "merged"
+os.makedirs(RAW_DIR, exist_ok = True)
+os.makedirs(MERGE_DIR, exist_ok = True)
 
 vad = TenVad(hop_size = HOP_SIZE, threshold = THRESHOLD)
 
@@ -23,16 +26,13 @@ is_recording = False
 current_audio = []
 
 segment_index = 0
-last_saved_file = None
-last_saved_time = None
+pending_group = [] # segment filenames waiting to be merged
+pending_close_time = None
 
-# Stats
-original_files = []
-merged_files = []
+start_time = time.time()   # track script runtime
 
 
 def save_wav(filename, audio_data):
-    """Save int16 numpy array as .wav file"""
     with wave.open(filename, "wb") as wf:
         wf.setnchannels(1)
         wf.setsampwidth(2)
@@ -40,79 +40,97 @@ def save_wav(filename, audio_data):
         wf.writeframes(audio_data.tobytes())
 
 
-def append_to_wav(filename, audio_data):
-    """Append int16 numpy array to existing .wav file"""
+def read_wav(filename):
     with wave.open(filename, "rb") as rf:
         params = rf.getparams()
-        old_frames = rf.readframes(rf.getnframes())
+        audio = np.frombuffer(rf.readframes(rf.getnframes()), dtype = np.int16)
+    return audio, params
 
-    # Merge old and new audio
-    new_audio = np.frombuffer(old_frames, dtype = np.int16)
-    combined = np.concatenate([new_audio, audio_data])
 
-    # Overwrite with combined
-    with wave.open(filename, "wb") as wf:
+def merge_wavs(files, out_file):
+    merged_audio = []
+    params = None
+    for f in files:
+        data, p = read_wav(f)
+        merged_audio.append(data)
+        if params is None:
+            params = p
+    merged_audio = np.concatenate(merged_audio)
+    with wave.open(out_file, "wb") as wf:
         wf.setparams(params)
-        wf.writeframes(combined.tobytes())
+        wf.writeframes(merged_audio.tobytes())
 
+
+def finalize_pending():
+    """Finalize pending group into a merged file (if >1 part)."""
+    global pending_group
+    if not pending_group:
+        return
+    if len(pending_group) == 1:
+        # Just one file, keep it as is in RAW folder
+        print(f"✅ Finalized single: {pending_group[0]}")
+    else:
+        merged_name = os.path.join(
+            MERGE_DIR,
+            "+".join([os.path.basename(p).replace(".wav", "") for p in pending_group]) + ".wav"
+        )
+        merge_wavs(pending_group, merged_name)
+        print(f"🔗 Created merged file: {merged_name}")
+        # Delete originals from RAW folder
+        for p in pending_group:
+            if os.path.exists(p):
+                os.remove(p)
+    pending_group = []
 
 def audio_callback(indata, frames, t, status):
     global last_speech_time, is_recording, current_audio
-    global segment_index, last_saved_file, last_saved_time
-    global original_files, merged_files
+    global segment_index, pending_group, pending_close_time
 
     if status:
         print("⚠️", status)
 
-    # Convert float32 (-1..1) → int16
     audio_chunk = (indata[:, 0] * 32767).astype(np.int16)
 
-    # Process in hop-size frames
     for start in range(0, len(audio_chunk), HOP_SIZE):
-        frame = audio_chunk[start : start + HOP_SIZE]
+        frame = audio_chunk[start:start + HOP_SIZE]
         if len(frame) < HOP_SIZE:
             frame = np.pad(frame, (0, HOP_SIZE - len(frame)))
 
         prob, flag = vad.process(frame)
 
-        if flag == 1:  # speech detected
+        # ✅ Always append the frame, whether speech or silence
+        current_audio.extend(frame.tolist())
+
+        if flag == 1:  # speech
             print(f"🟢 Speech detected (p={prob:.2f})")
             if not is_recording:
                 print("🟢 Speech started")
                 is_recording = True
-                current_audio = []
-            current_audio.extend(frame.tolist())
+                current_audio = []  # start fresh buffer
+                current_audio.extend(frame.tolist())
             last_speech_time = time.time()
 
-        else:  # silence detected
-            print(f"⚪ Silence (p={prob:.2f})")
-            if is_recording:
-                current_audio.extend(frame.tolist())
+            if pending_close_time and (time.time() - pending_close_time) <= OVERRIDE_TIMEOUT:
+                pending_close_time = None  # cancel pending finalize
 
-            # Check if silence lasted too long
+        else:  # silence
+            print(f"⚪ Silence (p={prob:.2f})")
+
+            # If silence lasts longer than SILENCE_TIMEOUT
             if last_speech_time and time.time() - last_speech_time > SILENCE_TIMEOUT:
                 if is_recording and len(current_audio) > 0:
-                    audio_data = np.array(current_audio, dtype=np.int16)
+                    # Save segment (includes speech + silence)
+                    audio_data = np.array(current_audio, dtype = np.int16)
+                    segment_index += 1
+                    filename = os.path.join(RAW_DIR, f"segment_{segment_index}.wav")
+                    save_wav(filename, audio_data)
+                    print(f"💾 Saved {filename}")
 
-                    # Check override merge condition
-                    now = time.time()
-                    if last_saved_file and last_saved_time and (now - last_saved_time) <= OVERRIDE_TIMEOUT:
-                        print(f"🔗 Merging into {last_saved_file}")
-                        append_to_wav(last_saved_file, audio_data)
-                        merged_files.append(last_saved_file)
-                    else:
-                        segment_index += 1
-                        filename = os.path.join(OUTPUT_DIR, f"segment_{segment_index}.wav")
-                        save_wav(filename, audio_data)
-                        last_saved_file = filename
-                        original_files.append(filename)
-                        print(f"💾 Saved {filename}")
-
-                    last_saved_time = now
+                    pending_group.append(filename)
+                    pending_close_time = time.time()
 
                 is_recording = False
                 current_audio = []
-
 
 if __name__ == "__main__":
     print("🎙️ TEN-VAD streaming... speak now! (Ctrl+C to stop)")
@@ -122,13 +140,15 @@ if __name__ == "__main__":
                             samplerate = SAMPLE_RATE,
                             blocksize = HOP_SIZE):
             while True:
+                # Check if pending group should be finalized
+                if pending_close_time and (time.time() - pending_close_time) > OVERRIDE_TIMEOUT:
+                    finalize_pending()
+                    pending_close_time = None
                 time.sleep(0.1)
     except KeyboardInterrupt:
         print("\n🛑 Stopped by user.")
-        print("\n📊 Recording Summary:")
-        print(f"  🎤 Original files saved: {len(original_files)}")
-        for f in original_files:
-            print(f"    - {f}")
-        print(f"  🔗 Files merged into previous: {len(merged_files)}")
-        for f in merged_files:
-            print(f"    - {f}")
+        finalize_pending()  # finalize leftovers
+
+        total_runtime = time.time() - start_time
+        print(f"⏱️ Total runtime: {total_runtime:.2f} seconds "
+              f"({total_runtime/60:.2f} minutes)")
