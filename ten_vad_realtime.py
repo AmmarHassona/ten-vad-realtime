@@ -6,7 +6,7 @@ from ten_vad import TenVad
 SAMPLE_RATE = 16000
 HOP_SIZE = 256
 THRESHOLD = 0.7
-SILENCE_TIMEOUT = 0.5
+SILENCE_TIMEOUT = 1
 
 vad = TenVad(hop_size = HOP_SIZE, threshold = THRESHOLD)
 last_speech_time = time.time()
