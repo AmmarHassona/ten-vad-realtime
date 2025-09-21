@@ -4,7 +4,7 @@ import time
 import wave
 import os
 from ten_vad import TenVad
-from datetime import datetime
+import json
 
 # Parameters
 SAMPLE_RATE = 16000
@@ -15,10 +15,10 @@ OVERRIDE_TIMEOUT = 2.0  # merging window
 
 RAW_DIR = "recordings"
 MERGE_DIR = "merged"
-os.makedirs(RAW_DIR, exist_ok = True)
-os.makedirs(MERGE_DIR, exist_ok = True)
+os.makedirs(RAW_DIR, exist_ok=True)
+os.makedirs(MERGE_DIR, exist_ok=True)
 
-vad = TenVad(hop_size = HOP_SIZE, threshold = THRESHOLD)
+vad = TenVad(hop_size=HOP_SIZE, threshold=THRESHOLD)
 
 # State
 last_speech_time = None
@@ -26,10 +26,23 @@ is_recording = False
 current_audio = []
 
 segment_index = 0
-pending_group = [] # segment filenames waiting to be merged
+pending_group = []  # segment filenames waiting to be merged
 pending_close_time = None
 
 start_time = time.time()   # track script runtime
+segment_start_time = None
+
+# store timestamps for all segments and merged files
+segment_times = {}
+
+# JSON output file
+TIMESTAMP_FILE = "timestamps.json"
+
+
+def save_timestamps():
+    """Persist current segment_times dict into a JSON file."""
+    with open(TIMESTAMP_FILE, "w", encoding="utf-8") as f:
+        json.dump(segment_times, f, indent=4)
 
 
 def save_wav(filename, audio_data):
@@ -43,7 +56,7 @@ def save_wav(filename, audio_data):
 def read_wav(filename):
     with wave.open(filename, "rb") as rf:
         params = rf.getparams()
-        audio = np.frombuffer(rf.readframes(rf.getnframes()), dtype = np.int16)
+        audio = np.frombuffer(rf.readframes(rf.getnframes()), dtype=np.int16)
     return audio, params
 
 
@@ -76,15 +89,38 @@ def finalize_pending():
         )
         merge_wavs(pending_group, merged_name)
         print(f"🔗 Created merged file: {merged_name}")
+
+        # 👉 compute absolute start/end times of merged group
+        first_seg = pending_group[0]
+        last_seg = pending_group[-1]
+
+        start_abs = segment_times.get(os.path.basename(first_seg), {}).get("start")
+        end_abs = segment_times.get(os.path.basename(last_seg), {}).get("end")
+
+        if start_abs is not None and end_abs is not None:
+            duration = end_abs - start_abs
+            print(f"⏱️ Merged absolute time range: {start_abs:.2f}s → {end_abs:.2f}s "
+                  f"(duration {duration:.2f}s)")
+
+            # save merged timestamps
+            segment_times[os.path.basename(merged_name)] = {
+                "start": start_abs,
+                "end": end_abs,
+                "duration": duration
+            }
+            save_timestamps()
+
         # Delete originals from RAW folder
         for p in pending_group:
             if os.path.exists(p):
                 os.remove(p)
     pending_group = []
 
+
 def audio_callback(indata, frames, t, status):
     global last_speech_time, is_recording, current_audio
     global segment_index, pending_group, pending_close_time
+    global segment_start_time
 
     if status:
         print("⚠️", status)
@@ -108,6 +144,8 @@ def audio_callback(indata, frames, t, status):
                 is_recording = True
                 current_audio = []  # start fresh buffer
                 current_audio.extend(frame.tolist())
+                # 👉 mark speech start absolute time
+                segment_start_time = time.time() - start_time
             last_speech_time = time.time()
 
             if pending_close_time and (time.time() - pending_close_time) <= OVERRIDE_TIMEOUT:
@@ -120,11 +158,21 @@ def audio_callback(indata, frames, t, status):
             if last_speech_time and time.time() - last_speech_time > SILENCE_TIMEOUT:
                 if is_recording and len(current_audio) > 0:
                     # Save segment (includes speech + silence)
-                    audio_data = np.array(current_audio, dtype = np.int16)
+                    audio_data = np.array(current_audio, dtype=np.int16)
                     segment_index += 1
                     filename = os.path.join(RAW_DIR, f"segment_{segment_index}.wav")
                     save_wav(filename, audio_data)
                     print(f"💾 Saved {filename}")
+
+                    # 👉 record absolute start/end + duration
+                    segment_end_time = time.time() - start_time
+                    duration = segment_end_time - segment_start_time
+                    segment_times[os.path.basename(filename)] = {
+                        "start": segment_start_time,
+                        "end": segment_end_time,
+                        "duration": duration
+                    }
+                    save_timestamps()
 
                     pending_group.append(filename)
                     pending_close_time = time.time()
@@ -132,13 +180,14 @@ def audio_callback(indata, frames, t, status):
                 is_recording = False
                 current_audio = []
 
+
 if __name__ == "__main__":
     print("🎙️ TEN-VAD streaming... speak now! (Ctrl+C to stop)")
     try:
-        with sd.InputStream(callback = audio_callback,
-                            channels = 1,
-                            samplerate = SAMPLE_RATE,
-                            blocksize = HOP_SIZE):
+        with sd.InputStream(callback=audio_callback,
+                            channels=1,
+                            samplerate=SAMPLE_RATE,
+                            blocksize=HOP_SIZE):
             while True:
                 # Check if pending group should be finalized
                 if pending_close_time and (time.time() - pending_close_time) > OVERRIDE_TIMEOUT:
@@ -152,3 +201,10 @@ if __name__ == "__main__":
         total_runtime = time.time() - start_time
         print(f"⏱️ Total runtime: {total_runtime:.2f} seconds "
               f"({total_runtime/60:.2f} minutes)")
+
+        # save total runtime in JSON too
+        segment_times["__summary__"] = {
+            "total_runtime_seconds": total_runtime,
+            "total_runtime_minutes": total_runtime / 60
+        }
+        save_timestamps()
