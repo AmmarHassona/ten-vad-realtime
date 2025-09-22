@@ -4,7 +4,7 @@ import json
 
 connected_clients = set()
 
-async def handler(websocket):  # remove path
+async def handler(websocket):
     connected_clients.add(websocket)
     print("🌐 Client connected")
     try:

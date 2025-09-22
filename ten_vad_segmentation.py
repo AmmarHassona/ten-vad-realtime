@@ -18,10 +18,10 @@ OVERRIDE_TIMEOUT = 2.0  # merging window
 
 RAW_DIR = "recordings"
 MERGE_DIR = "merged"
-os.makedirs(RAW_DIR, exist_ok=True)
-os.makedirs(MERGE_DIR, exist_ok=True)
+os.makedirs(RAW_DIR, exist_ok = True)
+os.makedirs(MERGE_DIR, exist_ok = True)
 
-vad = TenVad(hop_size=HOP_SIZE, threshold=THRESHOLD)
+vad = TenVad(hop_size = HOP_SIZE, threshold = THRESHOLD)
 
 # State
 last_speech_time = None
@@ -38,16 +38,13 @@ segment_start_time = None
 # store timestamps for all segments and merged files
 segment_times = {}
 
-# JSON output file
+# json output file (only for logging not manually passed to websocket)
 TIMESTAMP_FILE = "timestamps.json"
 
-# -----------------------
-# WebSocket sender setup
-# -----------------------
-# Change this to your WebSocket server if needed
+# WebSocket
 WS_URL = "ws://localhost:8765"
 
-# thread-safe queue for messages to be sent over WebSocket
+# queue for messages to be sent over WebSocket
 _ws_queue = queue.Queue()
 _ws_stop_event = threading.Event()
 
@@ -57,11 +54,11 @@ def ws_sender_loop():
     """
     while not _ws_stop_event.is_set():
         try:
-            ws = websocket.create_connection(WS_URL, timeout=5)
+            ws = websocket.create_connection(WS_URL, timeout = 5)
             print(f"🌐 WebSocket connected to {WS_URL}")
             while not _ws_stop_event.is_set():
                 try:
-                    msg = _ws_queue.get(timeout=1)  # blocking with timeout
+                    msg = _ws_queue.get(timeout = 1)  # blocking with timeout
                 except queue.Empty:
                     continue
                 try:
@@ -90,18 +87,13 @@ def send_ws_event(event_type, payload):
     except Exception as e:
         print("⚠️ Failed to enqueue WS message:", e)
 
-# Start background WS sender thread (daemon)
-_ws_thread = threading.Thread(target=ws_sender_loop, daemon=True)
+_ws_thread = threading.Thread(target = ws_sender_loop, daemon = True)
 _ws_thread.start()
-
-# -----------------------
-# End WebSocket setup
-# -----------------------
 
 def save_timestamps():
     """Persist current segment_times dict into a JSON file."""
-    with open(TIMESTAMP_FILE, "w", encoding="utf-8") as f:
-        json.dump(segment_times, f, indent=4)
+    with open(TIMESTAMP_FILE, "w", encoding = "utf-8") as f:
+        json.dump(segment_times, f, indent = 4)
 
 def save_wav(filename, audio_data):
     with wave.open(filename, "wb") as wf:
@@ -113,7 +105,7 @@ def save_wav(filename, audio_data):
 def read_wav(filename):
     with wave.open(filename, "rb") as rf:
         params = rf.getparams()
-        audio = np.frombuffer(rf.readframes(rf.getnframes()), dtype=np.int16)
+        audio = np.frombuffer(rf.readframes(rf.getnframes()), dtype = np.int16)
     return audio, params
 
 def merge_wavs(files, out_file):
@@ -198,7 +190,7 @@ def audio_callback(indata, frames, t, status):
 
         prob, flag = vad.process(frame)
 
-        # ✅ Always append the frame, whether speech or silence
+        # Always append the frame, whether speech or silence
         current_audio.extend(frame.tolist())
 
         if flag == 1:  # speech
@@ -208,7 +200,7 @@ def audio_callback(indata, frames, t, status):
                 is_recording = True
                 current_audio = []  # start fresh buffer
                 current_audio.extend(frame.tolist())
-                # 👉 mark speech start absolute time
+                # mark speech start absolute time
                 segment_start_time = time.time() - start_time
 
                 # send WS event for speech start
@@ -228,7 +220,7 @@ def audio_callback(indata, frames, t, status):
             if last_speech_time and time.time() - last_speech_time > SILENCE_TIMEOUT:
                 if is_recording and len(current_audio) > 0:
                     # Save segment (includes speech + silence)
-                    audio_data = np.array(current_audio, dtype=np.int16)
+                    audio_data = np.array(current_audio, dtype = np.int16)
                     segment_index += 1
                     filename = os.path.join(RAW_DIR, f"segment_{segment_index}.wav")
                     save_wav(filename, audio_data)
@@ -261,10 +253,10 @@ def audio_callback(indata, frames, t, status):
 if __name__ == "__main__":
     print("🎙️ TEN-VAD streaming... speak now! (Ctrl+C to stop)")
     try:
-        with sd.InputStream(callback=audio_callback,
-                            channels=1,
-                            samplerate=SAMPLE_RATE,
-                            blocksize=HOP_SIZE):
+        with sd.InputStream(callback = audio_callback,
+                            channels = 1,
+                            samplerate = SAMPLE_RATE,
+                            blocksize = HOP_SIZE):
             while True:
                 # Check if pending group should be finalized
                 if pending_close_time and (time.time() - pending_close_time) > OVERRIDE_TIMEOUT:
