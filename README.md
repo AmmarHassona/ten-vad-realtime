@@ -83,11 +83,3 @@ Press `Ctrl+C` to stop recording. The script will finalize any pending segments 
 
 - The `TenVad` module must be available in your Python path.
 - This repo is for research and prototyping; production use may require further error handling and security.
-
-## License
-
-MIT License
-
----
-
-**Contributions welcome!**
