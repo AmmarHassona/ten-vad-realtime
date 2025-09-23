@@ -9,8 +9,6 @@ import threading
 import queue
 import websocket
 
-from inference import predict_endpoint # inference predict_endpoint
-
 # Parameters
 SAMPLE_RATE = 16000
 HOP_SIZE = 256
