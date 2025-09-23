@@ -1,4 +1,3 @@
 venv
-merged
-recordings
-json-log
+/smart-turn/merged
+/smart-turn/recordings
